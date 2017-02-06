@@ -1,4 +1,3 @@
-
 package masquerade.substratum.services;
 
 import android.app.ActivityManager;
@@ -15,6 +14,7 @@ import android.content.IntentFilter;
 import android.content.IntentSender;
 import android.content.om.IOverlayManager;
 import android.content.om.OverlayInfo;
+import android.content.pm.IPackageDeleteObserver;
 import android.content.pm.IPackageInstallObserver2;
 import android.content.pm.IPackageManager;
 import android.content.pm.PackageInstaller;
@@ -241,22 +241,23 @@ public class JobService extends Service {
         }
     }
 
-    private void uninstall(String packageName) {
+    private void uninstall(String packageName, IPackageDeleteObserver observer) {
         try {
-            final LocalIntentReceiver receiver = new LocalIntentReceiver();
-            getPM().getPackageInstaller().uninstall(packageName, null /* callerPackageName */, 0,
-                    receiver.getIntentSender(), UserHandle.USER_SYSTEM);
-            final Intent result = receiver.getResult();
-            final int status = result.getIntExtra(PackageInstaller.EXTRA_STATUS,
-                    PackageInstaller.STATUS_FAILURE);
+            getPM().deletePackageAsUser(packageName, observer, 0, UserHandle.USER_SYSTEM);
+            //final LocalIntentReceiver receiver = new LocalIntentReceiver();
+            //getPM().getPackageInstaller().uninstall(packageName, null /* callerPackageName */, 0,
+            //        receiver.getIntentSender(), UserHandle.USER_SYSTEM);
+            //final Intent result = receiver.getResult();
+            //final int status = result.getIntExtra(PackageInstaller.EXTRA_STATUS,
+            //        PackageInstaller.STATUS_FAILURE);
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
-    private void disableOverlay(String packageName) {
+    private void switchOverlay(String packageName, boolean enable) {
         try {
-            getOMS().setEnabled(packageName, false, UserHandle.USER_SYSTEM, false);
+            getOMS().setEnabled(packageName, enable, UserHandle.USER_SYSTEM, false);
         } catch (RemoteException e) {
             e.printStackTrace();
         }
@@ -265,8 +266,8 @@ public class JobService extends Service {
     private boolean isOverlayEnabled(String packageName) {
         boolean enabled = false;
         try {
-            OverlayInfo info = getOMS().getOverlayInfo(packageName, UserHandle.USER_ALL);
-            enabled = info.isEnabled();
+            OverlayInfo info = getOMS().getOverlayInfo(packageName, UserHandle.USER_CURRENT);
+            enabled = info != null && info.isEnabled();
         } catch (RemoteException e) {
             e.printStackTrace();
         }
@@ -836,7 +837,7 @@ public class JobService extends Service {
         }
     }
 
-    private class Installer implements Runnable, IPackageInstallObserver2 {
+    private class Installer implements Runnable {
         String mPath;
 
         public Installer(String path) {
@@ -844,27 +845,28 @@ public class JobService extends Service {
         }
 
         @Override
-        public IBinder asBinder() {
-            return null;
-        }
-
-        @Override
-        public void onUserActionRequired(Intent intent) throws RemoteException {
-            log("Installer - user action required callback with " + mPath);
-        }
-
-        @Override
-        public void onPackageInstalled(String basePackageName, int returnCode, String msg,
-                Bundle extras) throws RemoteException {
-            log("Installer - successfully installed " + basePackageName + " from " + mPath);
-            Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE, Installer.this);
-            mJobHandler.sendMessage(message);
-        }
-
-        @Override
         public void run() {
             log("Installer - installing " + mPath);
-            install(mPath, this);
+            PackageInstallObserver observer = new PackageInstallObserver(Installer.this);
+            install(mPath, observer);
+        }
+    }
+
+    private class PackageInstallObserver extends IPackageInstallObserver2.Stub {
+        Object mObject;
+
+        public PackageInstallObserver(Object _object) {
+            mObject = _object;
+        }
+
+        public void onUserActionRequired(Intent intent) throws RemoteException {
+            log("Installer - user action required callback");
+        }
+
+        public void onPackageInstalled(String packageName, int returnCode, String msg, Bundle extras) {
+            log("Installer - successfully installed " + packageName);
+            Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE, mObject);
+            mJobHandler.sendMessage(message);
         }
     }
 
@@ -877,12 +879,30 @@ public class JobService extends Service {
 
         @Override
         public void run() {
+
+            // TODO: Fix isOverlayEnabled function, for now it's causing NPE
             if (isOverlayEnabled(mPackage)) {
                 log("Remover - disabling overlay for " + mPackage);
-                disableOverlay(mPackage);
+                switchOverlay(mPackage, false);
             }
+
             log("Remover - uninstalling " + mPackage);
-            uninstall(mPackage);
+            PackageDeleteObserver observer = new PackageDeleteObserver(Remover.this);
+            uninstall(mPackage, observer);
+        }
+    }
+
+    private class PackageDeleteObserver extends IPackageDeleteObserver.Stub {
+        Object mObject;
+
+        public PackageDeleteObserver(Object _object) {
+            mObject = _object;
+        }
+
+        public void packageDeleted(String packageName, int returnCode) {
+            log("Remover - successfully removed " + packageName);
+            Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE, mObject);
+            mJobHandler.sendMessage(message);
         }
     }
 
