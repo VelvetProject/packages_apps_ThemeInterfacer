@@ -104,6 +104,7 @@ public class JobService extends Service {
     private MainHandler mMainHandler;
     private final List<Runnable> mJobQueue = new ArrayList<>(0);
     private long mLastJobTime;
+    private boolean mIsRunning;
 
     @Override
     public void onCreate() {
@@ -233,7 +234,9 @@ public class JobService extends Service {
 
     private void install(String path, IPackageInstallObserver2 observer) {
         try {
-            getPM().installPackageAsUser(path, observer, PackageManager.INSTALL_REPLACE_EXISTING,
+            mIsRunning = true;
+            getPM().installPackageAsUser(path, observer,
+                    PackageManager.INSTALL_REPLACE_EXISTING,
                     null,
                     UserHandle.USER_SYSTEM);
         } catch (Exception e) {
@@ -243,13 +246,8 @@ public class JobService extends Service {
 
     private void uninstall(String packageName, IPackageDeleteObserver observer) {
         try {
+            mIsRunning = true;
             getPM().deletePackageAsUser(packageName, observer, 0, UserHandle.USER_SYSTEM);
-            //final LocalIntentReceiver receiver = new LocalIntentReceiver();
-            //getPM().getPackageInstaller().uninstall(packageName, null /* callerPackageName */, 0,
-            //        receiver.getIntentSender(), UserHandle.USER_SYSTEM);
-            //final Intent result = receiver.getResult();
-            //final int status = result.getIntExtra(PackageInstaller.EXTRA_STATUS,
-            //        PackageInstaller.STATUS_FAILURE);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -691,7 +689,7 @@ public class JobService extends Service {
                     synchronized (mJobQueue) {
                         job = mJobQueue.get(0);
                     }
-                    if (job != null) {
+                    if (job != null && !mIsRunning) {
                         job.run();
                     }
                     break;
@@ -865,6 +863,7 @@ public class JobService extends Service {
 
         public void onPackageInstalled(String packageName, int returnCode, String msg, Bundle extras) {
             log("Installer - successfully installed " + packageName);
+            mIsRunning = false;
             Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE, mObject);
             mJobHandler.sendMessage(message);
         }
@@ -901,6 +900,7 @@ public class JobService extends Service {
 
         public void packageDeleted(String packageName, int returnCode) {
             log("Remover - successfully removed " + packageName);
+            mIsRunning = false;
             Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE, mObject);
             mJobHandler.sendMessage(message);
         }
