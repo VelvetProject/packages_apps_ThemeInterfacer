@@ -81,12 +81,13 @@ public class JobService extends Service {
     public static final String JOB_TIME_KEY = "job_time_key";
     public static final String INSTALL_LIST_KEY = "install_list";
     public static final String UNINSTALL_LIST_KEY = "uninstall_list";
-    public static final String WITH_RESTART_UI_KEY = "with_restart_ui";
     public static final String BOOTANIMATION_FILE_NAME = "bootanimation_file_name";
     public static final String FONTS_PID = "fonts_pid";
     public static final String FONTS_FILENAME = "fonts_filename";
     public static final String AUDIO_PID = "audio_pid";
     public static final String AUDIO_FILENAME = "audio_filename";
+    public static final String ENABLE_LIST_KEY = "enable_list";
+    public static final String DISABLE_LIST_KEY = "disable_list";
     public static final String COMMAND_VALUE_JOB_COMPLETE = "job_complete";
     public static final String COMMAND_VALUE_INSTALL = "install";
     public static final String COMMAND_VALUE_UNINSTALL = "uninstall";
@@ -95,6 +96,8 @@ public class JobService extends Service {
     public static final String COMMAND_VALUE_BOOTANIMATION = "bootanimation";
     public static final String COMMAND_VALUE_FONTS = "fonts";
     public static final String COMMAND_VALUE_AUDIO = "audio";
+    public static final String COMMAND_VALUE_ENABLE = "enable";
+    public static final String COMMAND_VALUE_DISABLE = "disable";
 
     private static IOverlayManager mOMS;
     private static IPackageManager mPM;
@@ -157,9 +160,7 @@ public class JobService extends Service {
             for (String _package : packages) {
                 jobs_to_add.add(new Remover(_package));
             }
-            if (intent.getBooleanExtra(WITH_RESTART_UI_KEY, false)) {
-                jobs_to_add.add(new UiResetJob());
-            }
+            if (shouldRestartUi(packages)) jobs_to_add.add(new UiResetJob());
         } else if (TextUtils.equals(command, COMMAND_VALUE_RESTART_UI)) {
             jobs_to_add.add(new UiResetJob());
         } else if (TextUtils.equals(command, COMMAND_VALUE_CONFIGURATION_SHIM)) {
@@ -181,6 +182,18 @@ public class JobService extends Service {
             String fileName = intent.getStringExtra(AUDIO_FILENAME);
             jobs_to_add.add(new SoundsJob(pid, fileName));
             jobs_to_add.add(new UiResetJob());
+        } else if (TextUtils.equals(command, COMMAND_VALUE_ENABLE)) {
+            List<String> packages = intent.getStringArrayListExtra(ENABLE_LIST_KEY);
+            for (String _package : packages) {
+                jobs_to_add.add(new Enabler(_package));
+            }
+            if (shouldRestartUi(packages)) jobs_to_add.add(new UiResetJob());
+        } else if (TextUtils.equals(command, COMMAND_VALUE_DISABLE)) {
+            List<String> packages = intent.getStringArrayListExtra(DISABLE_LIST_KEY);
+            for (String _package : packages) {
+                jobs_to_add.add(new Disabler(_package));
+            }
+            if (shouldRestartUi(packages)) jobs_to_add.add(new UiResetJob());
         }
 
         if (jobs_to_add.size() > 0) {
@@ -270,6 +283,13 @@ public class JobService extends Service {
             e.printStackTrace();
         }
         return enabled;
+    }
+
+    private boolean shouldRestartUi(List<String> overlays) {
+        for (String o : overlays) {
+            if (o.startsWith("com.android.systemui")) return true;
+        }
+        return false;
     }
 
     private void copyFonts(String pid, String zipFileName) {
@@ -902,6 +922,40 @@ public class JobService extends Service {
             log("Remover - successfully removed " + packageName);
             mIsRunning = false;
             Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE, mObject);
+            mJobHandler.sendMessage(message);
+        }
+    }
+
+    private class Enabler implements Runnable {
+        String mPackage;
+
+        public Enabler(String _package) {
+            mPackage = _package;
+        }
+
+        @Override
+        public void run() {
+            log("Enabler - enabling overlay for " + mPackage);
+            switchOverlay(mPackage, true);
+            Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE,
+                    Enabler.this);
+            mJobHandler.sendMessage(message);
+        }
+    }
+
+    private class Disabler implements Runnable {
+        String mPackage;
+
+        public Disabler(String _package) {
+            mPackage = _package;
+        }
+
+        @Override
+        public void run() {
+            log("Disabler - disabling overlay for " + mPackage);
+            switchOverlay(mPackage, false);
+            Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE,
+                    Disabler.this);
             mJobHandler.sendMessage(message);
         }
     }
