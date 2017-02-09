@@ -88,6 +88,7 @@ public class JobService extends Service {
     public static final String AUDIO_FILENAME = "audio_filename";
     public static final String ENABLE_LIST_KEY = "enable_list";
     public static final String DISABLE_LIST_KEY = "disable_list";
+    public static final String PRIORITY_LIST_KEY = "priority_list";
     public static final String COMMAND_VALUE_JOB_COMPLETE = "job_complete";
     public static final String COMMAND_VALUE_INSTALL = "install";
     public static final String COMMAND_VALUE_UNINSTALL = "uninstall";
@@ -98,6 +99,7 @@ public class JobService extends Service {
     public static final String COMMAND_VALUE_AUDIO = "audio";
     public static final String COMMAND_VALUE_ENABLE = "enable";
     public static final String COMMAND_VALUE_DISABLE = "disable";
+    public static final String COMMAND_VALUE_PRIORITY = "priority";
 
     private static IOverlayManager mOMS;
     private static IPackageManager mPM;
@@ -194,6 +196,10 @@ public class JobService extends Service {
                 jobs_to_add.add(new Disabler(_package));
             }
             if (shouldRestartUi(packages)) jobs_to_add.add(new UiResetJob());
+        } else if (TextUtils.equals(command, COMMAND_VALUE_PRIORITY)) {
+            List<String> packages = intent.getStringArrayListExtra(PRIORITY_LIST_KEY);
+            jobs_to_add.add(new PriorityJob(packages));
+            if (shouldRestartUi(packages)) jobs_to_add.add(new UiResetJob());
         }
 
         if (jobs_to_add.size() > 0) {
@@ -277,8 +283,12 @@ public class JobService extends Service {
     private boolean isOverlayEnabled(String packageName) {
         boolean enabled = false;
         try {
-            OverlayInfo info = getOMS().getOverlayInfo(packageName, UserHandle.USER_CURRENT);
-            enabled = info != null && info.isEnabled();
+            OverlayInfo info = getOMS().getOverlayInfo(packageName, UserHandle.USER_SYSTEM);
+            if (info != null) {
+                enabled = info.isEnabled();
+            } else {
+                log("info is null");
+            }
         } catch (RemoteException e) {
             e.printStackTrace();
         }
@@ -956,6 +966,32 @@ public class JobService extends Service {
             switchOverlay(mPackage, false);
             Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE,
                     Disabler.this);
+            mJobHandler.sendMessage(message);
+        }
+    }
+
+    private class PriorityJob implements Runnable {
+        List<String> mPackages;
+
+        public PriorityJob(List<String> _packages) {
+            mPackages = _packages;
+        }
+
+        @Override
+        public void run() {
+            log("PriorityJob - processing priority changes");
+            try {
+                int size = mPackages.size();
+                for (int i = 0; i < size-1; i++) {
+                    String parentName = mPackages.get(i);
+                    String packageName = mPackages.get(i+1);
+                    getOMS().setPriority(packageName, parentName, UserHandle.USER_SYSTEM);
+                }
+            } catch (RemoteException e) {
+                e.printStackTrace();
+            }
+            Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE,
+                    PriorityJob.this);
             mJobHandler.sendMessage(message);
         }
     }
