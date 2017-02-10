@@ -89,6 +89,8 @@ public class JobService extends Service {
     public static final String ENABLE_LIST_KEY = "enable_list";
     public static final String DISABLE_LIST_KEY = "disable_list";
     public static final String PRIORITY_LIST_KEY = "priority_list";
+    public static final String SOURCE_FILE_KEY = "source_file";
+    public static final String DESTINATION_FILE_KEY = "destination_file";
     public static final String COMMAND_VALUE_JOB_COMPLETE = "job_complete";
     public static final String COMMAND_VALUE_INSTALL = "install";
     public static final String COMMAND_VALUE_UNINSTALL = "uninstall";
@@ -100,6 +102,9 @@ public class JobService extends Service {
     public static final String COMMAND_VALUE_ENABLE = "enable";
     public static final String COMMAND_VALUE_DISABLE = "disable";
     public static final String COMMAND_VALUE_PRIORITY = "priority";
+    public static final String COMMAND_VALUE_COPY = "copy";
+    public static final String COMMAND_VALUE_MOVE = "move";
+    public static final String COMMAND_VALUE_DELETE = "delete";
 
     private static IOverlayManager mOMS;
     private static IPackageManager mPM;
@@ -200,6 +205,17 @@ public class JobService extends Service {
             List<String> packages = intent.getStringArrayListExtra(PRIORITY_LIST_KEY);
             jobs_to_add.add(new PriorityJob(packages));
             if (shouldRestartUi(packages)) jobs_to_add.add(new UiResetJob());
+        } else if (TextUtils.equals(command, COMMAND_VALUE_COPY)) {
+            String source = intent.getStringExtra(SOURCE_FILE_KEY);
+            String destination = intent.getStringExtra(DESTINATION_FILE_KEY);
+            jobs_to_add.add(new CopyJob(source, destination));
+        } else if (TextUtils.equals(command, COMMAND_VALUE_MOVE)) {
+            String source = intent.getStringExtra(SOURCE_FILE_KEY);
+            String destination = intent.getStringExtra(DESTINATION_FILE_KEY);
+            jobs_to_add.add(new MoveJob(source, destination));
+        } else if (TextUtils.equals(command, COMMAND_VALUE_DELETE)) {
+            String dir = intent.getStringExtra(SOURCE_FILE_KEY);
+            jobs_to_add.add(new DeleteJob(dir));
         }
 
         if (jobs_to_add.size() > 0) {
@@ -992,6 +1008,73 @@ public class JobService extends Service {
             }
             Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE,
                     PriorityJob.this);
+            mJobHandler.sendMessage(message);
+        }
+    }
+
+    private class CopyJob implements Runnable {
+        String mSource;
+        String mDestination;
+
+        public CopyJob(String _source, String _destination) {
+            mSource = _source;
+            mDestination = _destination;
+        }
+
+        @Override
+        public void run() {
+            log("CopyJob - copying " + mSource + " to " + mDestination);
+            File sourceFile = new File(mSource);
+            if (sourceFile.isFile()) {
+                IOUtils.bufferedCopy(mSource, mDestination);
+            } else {
+                IOUtils.copyFolder(mSource, mDestination);
+            }
+            Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE,
+                    CopyJob.this);
+            mJobHandler.sendMessage(message);
+        }
+    }
+
+    private class MoveJob implements Runnable {
+        String mSource;
+        String mDestination;
+
+        public MoveJob(String _source, String _destination) {
+            mSource = _source;
+            mDestination = _destination;
+        }
+
+        @Override
+        public void run() {
+            log("MoveJob - moving " + mSource + " to " + mDestination);
+            File sourceFile = new File(mSource);
+            if (sourceFile.isFile()) {
+                IOUtils.bufferedCopy(mSource, mDestination);
+            } else {
+                IOUtils.copyFolder(mSource, mDestination);
+            }
+            IOUtils.deleteRecursive(sourceFile);
+            Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE,
+                    MoveJob.this);
+            mJobHandler.sendMessage(message);
+        }
+    }
+
+    private class DeleteJob implements Runnable {
+        String mFileOrDirectory;
+
+        public DeleteJob(String _directory) {
+            mFileOrDirectory = _directory;
+        }
+
+        @Override
+        public void run() {
+            log("DeleteJob - deleting " + mFileOrDirectory);
+            File file = new File(mFileOrDirectory);
+            IOUtils.deleteRecursive(file);
+            Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE,
+                    DeleteJob.this);
             mJobHandler.sendMessage(message);
         }
     }
