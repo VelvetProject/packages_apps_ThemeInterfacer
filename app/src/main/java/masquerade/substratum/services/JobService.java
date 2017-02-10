@@ -132,11 +132,10 @@ public class JobService extends Service {
             return START_NOT_STICKY;
         }
 
-        // one job at a time please
-        // if (isProcessing()) {
-        // log("Got start command while still processing last job, aborting");
-        // return START_NOT_STICKY;
-        // }
+        // Don't run job if there is another running job
+        mIsRunning = false;
+        if (isProcessing()) mIsRunning = true;
+
         // filter out duplicate intents
         long jobTime = intent.getLongExtra(JOB_TIME_KEY, 1);
         if (jobTime == 1 || jobTime == mLastJobTime) {
@@ -269,7 +268,6 @@ public class JobService extends Service {
 
     private void install(String path, IPackageInstallObserver2 observer) {
         try {
-            mIsRunning = true;
             getPM().installPackageAsUser(path, observer,
                     PackageManager.INSTALL_REPLACE_EXISTING,
                     null,
@@ -281,7 +279,6 @@ public class JobService extends Service {
 
     private void uninstall(String packageName, IPackageDeleteObserver observer) {
         try {
-            mIsRunning = true;
             getPM().deletePackageAsUser(packageName, observer, 0, UserHandle.USER_SYSTEM);
         } catch (Exception e) {
             e.printStackTrace();
@@ -744,8 +741,10 @@ public class JobService extends Service {
                     synchronized (mJobQueue) {
                         mJobQueue.remove(toRemove);
                         if (mJobQueue.size() > 0) {
+                            mIsRunning = false;
                             this.sendEmptyMessage(MESSAGE_CHECK_QUEUE);
                         } else {
+                            mIsRunning = false;
                             log("Job queue empty! All done");
                             mMainHandler.sendEmptyMessage(MainHandler.MSG_JOB_QUEUE_EMPTY);
                         }
@@ -909,7 +908,6 @@ public class JobService extends Service {
 
         public void onPackageInstalled(String packageName, int returnCode, String msg, Bundle extras) {
             log("Installer - successfully installed " + packageName);
-            mIsRunning = false;
             Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE, mObject);
             mJobHandler.sendMessage(message);
         }
@@ -946,7 +944,6 @@ public class JobService extends Service {
 
         public void packageDeleted(String packageName, int returnCode) {
             log("Remover - successfully removed " + packageName);
-            mIsRunning = false;
             Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE, mObject);
             mJobHandler.sendMessage(message);
         }
@@ -1025,10 +1022,14 @@ public class JobService extends Service {
         public void run() {
             log("CopyJob - copying " + mSource + " to " + mDestination);
             File sourceFile = new File(mSource);
-            if (sourceFile.isFile()) {
-                IOUtils.bufferedCopy(mSource, mDestination);
+            if (sourceFile.exists()) {
+                if (sourceFile.isFile()) {
+                    IOUtils.bufferedCopy(mSource, mDestination);
+                } else {
+                    IOUtils.copyFolder(mSource, mDestination);
+                }
             } else {
-                IOUtils.copyFolder(mSource, mDestination);
+                log("CopyJob - " + mSource + " is not exist! aborting...");
             }
             Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE,
                     CopyJob.this);
@@ -1049,12 +1050,16 @@ public class JobService extends Service {
         public void run() {
             log("MoveJob - moving " + mSource + " to " + mDestination);
             File sourceFile = new File(mSource);
-            if (sourceFile.isFile()) {
-                IOUtils.bufferedCopy(mSource, mDestination);
+            if (sourceFile.exists()) {
+                if (sourceFile.isFile()) {
+                    IOUtils.bufferedCopy(mSource, mDestination);
+                } else {
+                    IOUtils.copyFolder(mSource, mDestination);
+                }
+                IOUtils.deleteRecursive(sourceFile);
             } else {
-                IOUtils.copyFolder(mSource, mDestination);
+                log("MoveJob - " + mSource + " is not exist! aborting...");
             }
-            IOUtils.deleteRecursive(sourceFile);
             Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE,
                     MoveJob.this);
             mJobHandler.sendMessage(message);
@@ -1072,7 +1077,11 @@ public class JobService extends Service {
         public void run() {
             log("DeleteJob - deleting " + mFileOrDirectory);
             File file = new File(mFileOrDirectory);
-            IOUtils.deleteRecursive(file);
+            if (file.exists()) {
+                IOUtils.deleteRecursive(file);
+            } else {
+                log("DeleteJob - " + mFileOrDirectory + " is already deleted!");
+            }
             Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE,
                     DeleteJob.this);
             mJobHandler.sendMessage(message);
