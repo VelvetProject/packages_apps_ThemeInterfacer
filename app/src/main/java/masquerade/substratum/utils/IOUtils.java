@@ -77,7 +77,7 @@ public class IOUtils {
             e.printStackTrace();
         }
     }
-    
+
     public static void deleteThemedAudio() {
         try {
             deleteRecursive(new File(SYSTEM_THEME_UI_SOUNDS_PATH));
@@ -91,12 +91,18 @@ public class IOUtils {
 
     public static void copyFolder(String source, String dest) {
         File dir = new File(source);
+        File des = new File(dest);
+        if (!des.exists()) des.mkdirs();
         File[] files = dir.listFiles();
         for (File file : files) {
             try {
-                String sourceFile = dir + File.separator + file.getName();
-                String destinationFile = dest + File.separator + file.getName();
-                bufferedCopy(new File(sourceFile), new File(destinationFile));
+                File newFile = new File(des.getAbsolutePath() + File.separator +
+                        file.getName());
+                if (file.isFile()) {
+                    bufferedCopy(file, newFile);
+                } else {
+                    copyFolder(file.getAbsolutePath(), newFile.getAbsolutePath());
+                }
             } catch (Exception e) {
                 e.printStackTrace();
             }
