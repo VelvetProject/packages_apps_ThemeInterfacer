@@ -26,6 +26,7 @@ import android.graphics.Typeface;
 import android.media.RingtoneManager;
 import android.os.Binder;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.FileUtils;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -91,6 +92,8 @@ public class JobService extends Service {
     public static final String PRIORITY_LIST_KEY = "priority_list";
     public static final String SOURCE_FILE_KEY = "source_file";
     public static final String DESTINATION_FILE_KEY = "destination_file";
+    public static final String WITH_DELETE_PARENT_KEY = "delete_parent";
+    public static final String PROFILE_NAME_KEY = "profile_name";
     public static final String COMMAND_VALUE_JOB_COMPLETE = "job_complete";
     public static final String COMMAND_VALUE_INSTALL = "install";
     public static final String COMMAND_VALUE_UNINSTALL = "uninstall";
@@ -105,6 +108,7 @@ public class JobService extends Service {
     public static final String COMMAND_VALUE_COPY = "copy";
     public static final String COMMAND_VALUE_MOVE = "move";
     public static final String COMMAND_VALUE_DELETE = "delete";
+    public static final String COMMAND_VALUE_PROFILE = "profile";
 
     private static IOverlayManager mOMS;
     private static IPackageManager mPM;
@@ -214,7 +218,18 @@ public class JobService extends Service {
             jobs_to_add.add(new MoveJob(source, destination));
         } else if (TextUtils.equals(command, COMMAND_VALUE_DELETE)) {
             String dir = intent.getStringExtra(SOURCE_FILE_KEY);
-            jobs_to_add.add(new DeleteJob(dir));
+            if (intent.getBooleanExtra(WITH_DELETE_PARENT_KEY, true)) {
+                jobs_to_add.add(new DeleteJob(dir));
+            } else {
+                for (File child : new File(dir).listFiles()) {
+                    jobs_to_add.add(new DeleteJob(child.getAbsolutePath()));
+                }
+            }
+        } else if (TextUtils.equals(command, COMMAND_VALUE_PROFILE)) {
+            List<String> enable = intent.getStringArrayListExtra(ENABLE_LIST_KEY);
+            List<String> disable = intent.getStringArrayListExtra(DISABLE_LIST_KEY);
+            String profile = intent.getStringExtra(PROFILE_NAME_KEY);
+            jobs_to_add.add(new ProfileJob(profile, disable, enable));
         }
 
         if (jobs_to_add.size() > 0) {
@@ -370,23 +385,26 @@ public class JobService extends Service {
         IOUtils.createFontDirIfNotExists();
         IOUtils.copyFolder(cacheDir.getAbsolutePath(), IOUtils.SYSTEM_THEME_FONT_PATH);
 
-        // set permissions on font files and config xml
-        File themeFonts = new File(IOUtils.SYSTEM_THEME_FONT_PATH);
-        for (File f : themeFonts.listFiles()) {
-            FileUtils.setPermissions(f,
-                    FileUtils.S_IRWXU | FileUtils.S_IRGRP | FileUtils.S_IRWXO, -1, -1);
-        }
-
         // let system know it's time for a font change
-        SystemProperties.set("sys.refresh_theme", "1");
-        float fontSize = Float.valueOf(Settings.System.getString(
-                getContentResolver(), Settings.System.FONT_SCALE));
-        Settings.System.putString(getContentResolver(),
-                Settings.System.FONT_SCALE, String.valueOf(fontSize + 0.0000001));
+        refreshFonts();
     }
 
     private void clearFonts() {
         IOUtils.deleteThemedFonts();
+        refreshFonts();
+    }
+
+    private void refreshFonts() {
+        // set permissions on font files and config xml
+        File themeFonts = new File(IOUtils.SYSTEM_THEME_FONT_PATH);
+        if (themeFonts.exists()) {
+            // Set permissions
+            IOUtils.setPermissionsRecursive(themeFonts,
+                    FileUtils.S_IRWXU | FileUtils.S_IRGRP | FileUtils.S_IRWXO,
+                    FileUtils.S_IRWXU | FileUtils.S_IRWXG | FileUtils.S_IROTH | FileUtils.S_IXOTH);
+        }
+
+        // let system know it's time for a font change
         SystemProperties.set("sys.refresh_theme", "1");
         Typeface.recreateDefaults();
         float fontSize = Float.valueOf(Settings.System.getString(
@@ -437,56 +455,29 @@ public class JobService extends Service {
             File effect_tick_ogg = new File(getCacheDir(), "/SoundsCache/ui/Effect_Tick.ogg");
             if (effect_tick_ogg.exists()) {
                 IOUtils.bufferedCopy(effect_tick_ogg, new File(IOUtils.SYSTEM_THEME_UI_SOUNDS_PATH + File.separator + "Effect_Tick.ogg"));
-                SoundUtils.setUIAudible(this, effect_tick_ogg, new File
-                        ("/data/system/theme/audio/ui/Effect_Tick.ogg"), RingtoneManager
-                        .TYPE_RINGTONE, "Effect_Tick");
             } else if (effect_tick_mp3.exists()) {
                 IOUtils.bufferedCopy(effect_tick_mp3, new File(IOUtils.SYSTEM_THEME_UI_SOUNDS_PATH + File.separator + "Effect_Tick.mp3"));
-                SoundUtils.setUIAudible(this, effect_tick_mp3, new File
-                        ("/data/system/theme/audio/ui/Effect_Tick.mp3"), RingtoneManager
-                        .TYPE_RINGTONE, "Effect_Tick");
-            } else {
-                SoundUtils.setDefaultUISounds(getContentResolver(), "lock_sound", "Lock.ogg");
             }
             File new_lock_mp3 = new File(getCacheDir(), "/SoundsCache/ui/Lock.mp3");
             File new_lock_ogg = new File(getCacheDir(), "/SoundsCache/ui/Lock.ogg");
             if (new_lock_ogg.exists()) {
                 IOUtils.bufferedCopy(new_lock_ogg, new File(IOUtils.SYSTEM_THEME_UI_SOUNDS_PATH + File.separator + "Lock.ogg"));
-                SoundUtils.setUISounds(getContentResolver(), "lock_sound", "/data/system/theme/audio/ui/Lock.ogg");
             } else if (new_lock_mp3.exists()) {
                 IOUtils.bufferedCopy(new_lock_mp3, new File(IOUtils.SYSTEM_THEME_UI_SOUNDS_PATH + File.separator + "Lock.mp3"));
-                SoundUtils.setUISounds(getContentResolver(), "lock_sound", "/data/system/theme/audio/ui/Lock.mp3");
-            } else {
-                SoundUtils.setDefaultUISounds(getContentResolver(), "lock_sound", "Lock.ogg");
             }
             File new_unlock_mp3 = new File(getCacheDir(), "/SoundsCache/ui/Unlock.mp3");
             File new_unlock_ogg = new File(getCacheDir(), "/SoundsCache/ui/Unlock.ogg");
             if (new_unlock_ogg.exists()) {
                 IOUtils.bufferedCopy(new_unlock_ogg, new File(IOUtils.SYSTEM_THEME_UI_SOUNDS_PATH + File.separator + "Unlock.ogg"));
-                SoundUtils.setUISounds(getContentResolver(), "unlock_sound", "/data/system/theme/audio/ui/Unlock.ogg");
             } else if (new_unlock_mp3.exists()) {
                 IOUtils.bufferedCopy(new_unlock_mp3, new File(IOUtils.SYSTEM_THEME_UI_SOUNDS_PATH + File.separator + "Unlock.mp3"));
-                SoundUtils.setUISounds(getContentResolver(), "unlock_sound", "/data/system/theme/audio/ui/Unlock.mp3");
-            } else {
-                SoundUtils.setDefaultUISounds(getContentResolver(), "unlock_sound", "Unlock.ogg");
             }
             File new_lowbattery_mp3 = new File(getCacheDir(), "/SoundsCache/ui/LowBattery.mp3");
             File new_lowbattery_ogg = new File(getCacheDir(), "/SoundsCache/ui/LowBattery.ogg");
             if (new_lowbattery_ogg.exists()) {
                 IOUtils.bufferedCopy(new_lowbattery_ogg, new File(IOUtils.SYSTEM_THEME_UI_SOUNDS_PATH + File.separator + "LowBattery.ogg"));
-                SoundUtils.setUISounds(getContentResolver(), "low_battery_sound", "/data/system/theme/audio/ui/LowBattery.ogg");
             } else if (new_lowbattery_mp3.exists()) {
                 IOUtils.bufferedCopy(new_lowbattery_mp3, new File(IOUtils.SYSTEM_THEME_UI_SOUNDS_PATH + File.separator + "LowBattery.mp3"));
-                SoundUtils.setUISounds(getContentResolver(), "low_battery_sound", "/data/system/theme/audio/ui/LowBattery.mp3");
-            } else {
-                SoundUtils.setDefaultUISounds(getContentResolver(), "low_battery_sound", "LowBattery.ogg");
-            }
-            File uiSounds = new File(IOUtils.SYSTEM_THEME_UI_SOUNDS_PATH);
-            if (uiSounds.exists() && uiSounds.isDirectory()) {
-                for (File f : uiSounds.listFiles()) {
-                    FileUtils.setPermissions(f,
-                            FileUtils.S_IRWXU | FileUtils.S_IRGRP | FileUtils.S_IRWXO, -1, -1);
-                }
             }
         }
         File alarmCache = new File(getCacheDir(), "/SoundsCache/alarms/");
@@ -496,27 +487,8 @@ public class JobService extends Service {
             File new_alarm_ogg = new File(getCacheDir(), "/SoundsCache/alarms/alarm.ogg");
             if (new_alarm_ogg.exists()) {
                 IOUtils.bufferedCopy(new_alarm_ogg, new File(IOUtils.SYSTEM_THEME_ALARM_PATH + File.separator + "alarm.ogg"));
-                int metaDataId = getSubsContext().getResources().getIdentifier("content_resolver_alarm_metadata", "string", SUBSTRATUM_PACKAGE);
-                SoundUtils.setAudible(this, new File("/data/system/theme/audio/alarms/alarm.ogg"),
-                        new File(alarmCache.getAbsolutePath(), "alarm.ogg"),
-                        RingtoneManager.TYPE_ALARM,
-                        getSubsContext().getString(metaDataId));
             } else if (new_alarm_mp3.exists()) {
                 IOUtils.bufferedCopy(new_alarm_mp3, new File(IOUtils.SYSTEM_THEME_ALARM_PATH + File.separator + "alarm.mp3"));
-                int metaDataId = getSubsContext().getResources().getIdentifier("content_resolver_alarm_metadata", "string", SUBSTRATUM_PACKAGE);
-                SoundUtils.setAudible(this, new File("/data/system/theme/audio/alarms/alarm.mp3"),
-                        new File(alarmCache.getAbsolutePath(), "alarm.mp3"),
-                        RingtoneManager.TYPE_ALARM,
-                        getSubsContext().getString(metaDataId));
-            } else {
-                SoundUtils.setDefaultAudible(this, RingtoneManager.TYPE_ALARM);
-            }
-            File alarms = new File(IOUtils.SYSTEM_THEME_ALARM_PATH);
-            if (alarms.exists() && alarms.isDirectory()) {
-                for (File f : alarms.listFiles()) {
-                    FileUtils.setPermissions(f,
-                            FileUtils.S_IRWXU | FileUtils.S_IRGRP | FileUtils.S_IRWXO, -1, -1);
-                }
             }
         }
         File notifCache = new File(getCacheDir(), "/SoundsCache/notifications/");
@@ -526,27 +498,8 @@ public class JobService extends Service {
             File new_notif_ogg = new File(getCacheDir(), "/SoundsCache/notifications/notification.ogg");
             if (new_notif_ogg.exists()) {
                 IOUtils.bufferedCopy(new_notif_ogg, new File(IOUtils.SYSTEM_THEME_NOTIFICATION_PATH + File.separator + "notification.ogg"));
-                int metaDataId = getSubsContext().getResources().getIdentifier("content_resolver_notification_metadata", "string", SUBSTRATUM_PACKAGE);
-                SoundUtils.setAudible(this, new File("/data/system/theme/audio/notifications/notification.ogg"),
-                        new File(notifCache.getAbsolutePath(), "notification.ogg"),
-                        RingtoneManager.TYPE_NOTIFICATION,
-                        getSubsContext().getString(metaDataId));
             } else if (new_notif_mp3.exists()) {
                 IOUtils.bufferedCopy(new_notif_mp3, new File(IOUtils.SYSTEM_THEME_NOTIFICATION_PATH + File.separator + "notification.mp3"));
-                int metaDataId = getSubsContext().getResources().getIdentifier("content_resolver_notification_metadata", "string", SUBSTRATUM_PACKAGE);
-                SoundUtils.setAudible(this, new File("/data/system/theme/audio/notifications/notification.mp3"),
-                        new File(notifCache.getAbsolutePath(), "notification.mp3"),
-                        RingtoneManager.TYPE_NOTIFICATION,
-                        getSubsContext().getString(metaDataId));
-            } else {
-                SoundUtils.setDefaultAudible(this, RingtoneManager.TYPE_NOTIFICATION);
-            }
-            File notifs = new File(IOUtils.SYSTEM_THEME_NOTIFICATION_PATH);
-            if (notifs.exists() && notifs.isDirectory()) {
-                for (File f : notifs.listFiles()) {
-                    FileUtils.setPermissions(f,
-                            FileUtils.S_IRWXU | FileUtils.S_IRGRP | FileUtils.S_IRWXO, -1, -1);
-                }
             }
         }
         File ringtoneCache = new File(getCacheDir(), "/SoundsCache/ringtones/");
@@ -556,29 +509,13 @@ public class JobService extends Service {
             File new_ring_ogg = new File(getCacheDir(), "/SoundsCache/ringtones/ringtone.ogg");
             if (new_ring_ogg.exists()) {
                 IOUtils.bufferedCopy(new_ring_ogg, new File(IOUtils.SYSTEM_THEME_RINGTONE_PATH + File.separator + "ringtone.ogg"));
-                int metaDataId = getSubsContext().getResources().getIdentifier("content_resolver_ringtone_metadata", "string", SUBSTRATUM_PACKAGE);
-                SoundUtils.setAudible(this, new File("/data/system/theme/audio/ringtones/ringtone.ogg"),
-                        new File(notifCache.getAbsolutePath(), "ringtone.ogg"),
-                        RingtoneManager.TYPE_RINGTONE,
-                        getSubsContext().getString(metaDataId));
             } else if (new_ring_mp3.exists()) {
                 IOUtils.bufferedCopy(new_ring_mp3, new File(IOUtils.SYSTEM_THEME_RINGTONE_PATH + File.separator + "ringtone.mp3"));
-                int metaDataId = getSubsContext().getResources().getIdentifier("content_resolver_ringtone_metadata", "string", SUBSTRATUM_PACKAGE);
-                SoundUtils.setAudible(this, new File("/data/system/theme/audio/ringtones/ringtone.mp3"),
-                        new File(notifCache.getAbsolutePath(), "ringtone.mp3"),
-                        RingtoneManager.TYPE_RINGTONE,
-                        getSubsContext().getString(metaDataId));
-            } else {
-                SoundUtils.setDefaultAudible(this, RingtoneManager.TYPE_RINGTONE);
-            }
-            File rings = new File(IOUtils.SYSTEM_THEME_RINGTONE_PATH);
-            if (rings.exists() && rings.isDirectory()) {
-                for (File f : rings.listFiles()) {
-                    FileUtils.setPermissions(f,
-                            FileUtils.S_IRWXU | FileUtils.S_IRGRP | FileUtils.S_IRWXO, -1, -1);
-                }
             }
         }
+
+        // let system know it's time for a sound change
+        refreshSounds();
     }
 
     private void clearSounds(Context ctx) {
@@ -592,6 +529,121 @@ public class JobService extends Service {
                 "LowBattery.ogg");
     }
 
+    private void refreshSounds () {
+        File soundsDir = new File(IOUtils.SYSTEM_THEME_AUDIO_PATH);
+        if (soundsDir.exists()) {
+            // Set permissions
+            IOUtils.setPermissionsRecursive(soundsDir,
+                    FileUtils.S_IRWXU | FileUtils.S_IRGRP | FileUtils.S_IRWXO,
+                    FileUtils.S_IRWXU | FileUtils.S_IRWXG | FileUtils.S_IROTH | FileUtils.S_IXOTH);
+
+            File uiDir = new File(IOUtils.SYSTEM_THEME_UI_SOUNDS_PATH);
+            if (uiDir.exists()) {
+                File effect_tick_mp3 = new File(uiDir, "Effect_Tick.mp3");
+                File effect_tick_ogg = new File(uiDir, "Effect_Tick.ogg");
+                if (effect_tick_mp3.exists()) {
+                    SoundUtils.setUIAudible(this, effect_tick_mp3,
+                            effect_tick_mp3, RingtoneManager.TYPE_RINGTONE,
+                            "Effect_Tick");
+                } else if (effect_tick_ogg.exists()) {
+                    SoundUtils.setUIAudible(this, effect_tick_ogg,
+                            effect_tick_ogg, RingtoneManager.TYPE_RINGTONE,
+                            "Effect_Tick");
+                } else {
+                    SoundUtils.setDefaultUISounds(getContentResolver(),
+                            "Effect_Tick",
+                            "Effect_Tick.ogg");
+                }
+
+                File lock_mp3 = new File(uiDir, "Lock.mp3");
+                File lock_ogg = new File(uiDir, "Lock.ogg");
+                if (lock_mp3.exists()) {
+                    SoundUtils.setUISounds(getContentResolver(), "lock_sound",
+                            lock_mp3.getAbsolutePath());
+                } else if (lock_ogg.exists()) {
+                    SoundUtils.setUISounds(getContentResolver(), "lock_sound",
+                            lock_ogg.getAbsolutePath());
+                } else {
+                    SoundUtils.setDefaultUISounds(getContentResolver(),
+                            "lock_sound", "Lock.ogg");
+                }
+
+                File unlock_mp3 = new File(uiDir, "Unlock.mp3");
+                File unlock_ogg = new File(uiDir, "Unlock.ogg");
+                if (unlock_mp3.exists()) {
+                    SoundUtils.setUISounds(getContentResolver(), "unlock_sound",
+                            unlock_mp3.getAbsolutePath());
+                } else if (unlock_ogg.exists()) {
+                    SoundUtils.setUISounds(getContentResolver(), "unlock_sound",
+                            unlock_ogg.getAbsolutePath());
+                } else {
+                    SoundUtils.setDefaultUISounds(getContentResolver(),
+                            "unlock_sound", "Unlock.ogg");
+                }
+
+                File lowbattery_mp3 = new File(uiDir, "LowBattery.mp3");
+                File lowbattery_ogg = new File(uiDir, "LowBattery.ogg");
+                if (lowbattery_mp3.exists()) {
+                    SoundUtils.setUISounds(getContentResolver(), "low_battery_sound",
+                            lowbattery_mp3.getAbsolutePath());
+                } else if (lowbattery_ogg.exists()) {
+                    SoundUtils.setUISounds(getContentResolver(), "low_battery_sound",
+                            lowbattery_ogg.getAbsolutePath());
+                } else {
+                    SoundUtils.setDefaultUISounds(getContentResolver(),
+                            "low_battery_sound", "LowBattery.ogg");
+                }
+            }
+
+            File notifDir = new File(IOUtils.SYSTEM_THEME_NOTIFICATION_PATH);
+            if (notifDir.exists()) {
+                int metaDataId = getSubsContext().getResources().getIdentifier(
+                        "content_resolver_notification_metadata",
+                        "string", SUBSTRATUM_PACKAGE);
+
+                File notification_mp3 = new File(notifDir, "notification.mp3");
+                File notification_ogg = new File(notifDir, "notification.ogg");
+                if (notification_mp3.exists()) {
+                    SoundUtils.setAudible(this, notification_mp3,
+                            notification_mp3,
+                            RingtoneManager.TYPE_NOTIFICATION,
+                            getSubsContext().getString(metaDataId));
+                } else if (notification_ogg.exists()) {
+                    SoundUtils.setAudible(this, notification_ogg,
+                            notification_ogg,
+                            RingtoneManager.TYPE_NOTIFICATION,
+                            getSubsContext().getString(metaDataId));
+                } else {
+                    SoundUtils.setDefaultAudible(this,
+                            RingtoneManager.TYPE_NOTIFICATION);
+                }
+            }
+
+            File ringtoneDir = new File(IOUtils.SYSTEM_THEME_RINGTONE_PATH);
+            if (ringtoneDir.exists()) {
+                int metaDataId = getSubsContext().getResources().getIdentifier(
+                        "content_resolver_notification_metadata",
+                        "string", SUBSTRATUM_PACKAGE);
+
+                File ringtone_mp3 = new File(ringtoneDir, "ringtone.mp3");
+                File ringtone_ogg = new File(ringtoneDir, "ringtone.ogg");
+                if (ringtone_mp3.exists()) {
+                    SoundUtils.setAudible(this, ringtone_mp3,
+                            ringtone_mp3,
+                            RingtoneManager.TYPE_RINGTONE,
+                            getSubsContext().getString(metaDataId));
+                } else if (ringtone_ogg.exists()) {
+                    SoundUtils.setAudible(this, ringtone_ogg,
+                            ringtone_ogg,
+                            RingtoneManager.TYPE_RINGTONE,
+                            getSubsContext().getString(metaDataId));
+                } else {
+                    SoundUtils.setDefaultAudible(this,
+                            RingtoneManager.TYPE_RINGTONE);
+                }
+            }
+        }
+    }
     private void copyBootAnimation(String fileName) {
         try {
             clearBootAnimation();
@@ -599,8 +651,8 @@ public class JobService extends Service {
             File dest = new File(IOUtils.SYSTEM_THEME_BOOTANIMATION_PATH);
             IOUtils.bufferedCopy(source, dest);
             source.delete();
-            FileUtils.setPermissions(IOUtils.SYSTEM_THEME_BOOTANIMATION_PATH,
-                    FileUtils.S_IRWXU | FileUtils.S_IRGRP | FileUtils.S_IROTH, -1, -1);
+            IOUtils.setPermissions(dest,
+                    FileUtils.S_IRWXU | FileUtils.S_IRGRP | FileUtils.S_IROTH);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -1084,6 +1136,79 @@ public class JobService extends Service {
             }
             Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE,
                     DeleteJob.this);
+            mJobHandler.sendMessage(message);
+        }
+    }
+
+    private class ProfileJob implements Runnable {
+        String mProfileName;
+        List<String> mToBeDisabled;
+        List<String> mToBeEnabled;
+
+        public ProfileJob(String _name, List<String> _toBeDisabled, List<String> _toBeEnabled) {
+            mProfileName = _name;
+            mToBeDisabled = _toBeDisabled;
+            mToBeEnabled = _toBeEnabled;
+        }
+
+        @Override
+        public void run() {
+            boolean restartUi = false;
+            log("Applying profile...");
+
+            // Need to restart SystemUI?
+            restartUi = shouldRestartUi(mToBeDisabled) || shouldRestartUi(mToBeDisabled);
+
+            // Clear system theme folder content
+            File themeDir = new File(IOUtils.SYSTEM_THEME_PATH);
+            for (File f : themeDir.listFiles()) {
+                IOUtils.deleteRecursive(f);
+            }
+
+            // Process theme folder
+            File profileDir = new File(Environment.getExternalStorageDirectory()
+                    .getAbsolutePath() + "/substratum/profiles/" +
+                    mProfileName + "/theme");
+
+            if (profileDir.exists()) {
+                File profileFonts = new File(profileDir, "fonts");
+                if (profileFonts.exists()) {
+                    IOUtils.copyFolder(profileFonts, new File(IOUtils.SYSTEM_THEME_FONT_PATH));
+                    refreshFonts();
+                    restartUi = true;
+                } else {
+                    clearFonts();
+                }
+
+                File profileSounds = new File(profileDir, "audio");
+                if (profileSounds.exists()) {
+                    IOUtils.copyFolder(profileSounds, new File(IOUtils.SYSTEM_THEME_AUDIO_PATH));
+                    refreshSounds();
+                    restartUi = true;
+                } else {
+                    clearSounds(JobService.this);
+                }
+            }
+
+            // Disable all overlays installed
+            for (String overlay : mToBeDisabled) {
+                switchOverlay(overlay, false);
+            }
+
+            // Enable provided overlays
+            for (String overlay : mToBeEnabled) {
+                switchOverlay(overlay, true);
+            }
+
+            // Restart SystemUI when needed
+            if (restartUi) {
+                synchronized(mJobQueue) {
+                    mJobQueue.add(new UiResetJob());
+                }
+            }
+
+            Message message = mJobHandler.obtainMessage(JobHandler.MESSAGE_DEQUEUE,
+                    ProfileJob.this);
             mJobHandler.sendMessage(message);
         }
     }
