@@ -74,6 +74,8 @@ import java.util.stream.Collectors;
 import projekt.interfacer.utils.IOUtils;
 import projekt.interfacer.utils.SoundUtils;
 
+import projekt.substratum.IInterfacerInterface;
+
 public class JobService extends Service {
     public static final String INTENT_STATUS_CHANGED = "projekt.interfacer.STATUS_CHANGED";
     public static final String PRIMARY_COMMAND_KEY = "primary_command_key";
@@ -178,146 +180,176 @@ public class JobService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // Verify identity
-        boolean authorized = isCallerAuthorized(intent);
-
-        // Broadcast authorization result
-        informCaller(authorized);
-
-        if (!authorized) {
-            log("caller not authorized, aborting");
-            return START_NOT_STICKY;
-        }
-
-        // Don't run job if there is another running job
-        mIsRunning = isProcessing();
-
-        // Filter out duplicate intents
-        long jobTime = intent.getLongExtra(JOB_TIME_KEY, 1);
-        if (jobTime == 1 || jobTime == mLastJobTime) {
-            log("Received empty job time or duplicate job time, aborting");
-            return START_NOT_STICKY;
-        }
-        mLastJobTime = jobTime;
-
-        // Must have a primary command
-        String command = intent.getStringExtra(PRIMARY_COMMAND_KEY);
-        if (TextUtils.isEmpty(command)) {
-            log("Received empty primary command, aborting");
-            return START_NOT_STICKY;
-        }
-
-        // Queue up the job
-        List<Runnable> jobs_to_add = new ArrayList<>(0);
-
-        log("Starting job with primary command \'" + command + "\', with job time: " + jobTime);
-        if (TextUtils.equals(command, COMMAND_VALUE_INSTALL)) {
-            List<String> paths = intent.getStringArrayListExtra(INSTALL_LIST_KEY);
-            jobs_to_add.addAll(paths.stream().map(Installer::new).collect(Collectors.toList()));
-        } else if (TextUtils.equals(command, COMMAND_VALUE_UNINSTALL)) {
-            List<String> packages = intent.getStringArrayListExtra(UNINSTALL_LIST_KEY);
-            jobs_to_add.addAll(packages.stream().map(Remover::new).collect(Collectors.toList()));
-            if (intent.getBooleanExtra(WITH_RESTART_UI_KEY, false)) {
-                jobs_to_add.add(new UiResetJob());
-            }
-        } else if (TextUtils.equals(command, COMMAND_VALUE_RESTART_UI)) {
-            jobs_to_add.add(new UiResetJob());
-        } else if (TextUtils.equals(command, COMMAND_VALUE_RESTART_SERVICE)) {
-            log("Restarting JobService...");
-            restartService();
-        } else if (TextUtils.equals(command, COMMAND_VALUE_CONFIGURATION_SHIM)) {
-            jobs_to_add.add(new LocaleChanger(getApplicationContext(), mMainHandler));
-        } else if (TextUtils.equals(command, COMMAND_VALUE_BOOTANIMATION)) {
-            String fileName = intent.getStringExtra(BOOTANIMATION_FILE_NAME);
-            if (TextUtils.isEmpty(fileName)) {
-                jobs_to_add.add(new BootAnimationJob(true));
-            } else {
-                jobs_to_add.add(new BootAnimationJob(fileName));
-            }
-        } else if (TextUtils.equals(command, COMMAND_VALUE_FONTS)) {
-            String pid = intent.getStringExtra(FONTS_PID);
-            String fileName = intent.getStringExtra(FONTS_FILENAME);
-
-            jobs_to_add.add(new FontsJob(pid, fileName));
-            jobs_to_add.add(new UiResetJob());
-        } else if (TextUtils.equals(command, COMMAND_VALUE_AUDIO)) {
-            String pid = intent.getStringExtra(AUDIO_PID);
-            String fileName = intent.getStringExtra(AUDIO_FILENAME);
-
-            jobs_to_add.add(new SoundsJob(pid, fileName));
-            jobs_to_add.add(new UiResetJob());
-        } else if (TextUtils.equals(command, COMMAND_VALUE_ENABLE)) {
-            List<String> packages = intent.getStringArrayListExtra(ENABLE_LIST_KEY);
-            jobs_to_add.addAll(packages.stream().map(Enabler::new).collect(Collectors.toList()));
-
-            if (intent.getBooleanExtra(WITH_RESTART_UI_KEY, false)) {
-                jobs_to_add.add(new UiResetJob());
-            }
-        } else if (TextUtils.equals(command, COMMAND_VALUE_DISABLE)) {
-            List<String> packages = intent.getStringArrayListExtra(DISABLE_LIST_KEY);
-            jobs_to_add.addAll(packages.stream().map(Disabler::new).collect(Collectors.toList()));
-
-            if (intent.getBooleanExtra(WITH_RESTART_UI_KEY, false)) {
-                jobs_to_add.add(new UiResetJob());
-            }
-        } else if (TextUtils.equals(command, COMMAND_VALUE_PRIORITY)) {
-            List<String> packages = intent.getStringArrayListExtra(PRIORITY_LIST_KEY);
-            jobs_to_add.add(new PriorityJob(packages));
-
-            if (intent.getBooleanExtra(WITH_RESTART_UI_KEY, false)) {
-                jobs_to_add.add(new UiResetJob());
-            }
-        } else if (TextUtils.equals(command, COMMAND_VALUE_COPY)) {
-            String source = intent.getStringExtra(SOURCE_FILE_KEY);
-            String destination = intent.getStringExtra(DESTINATION_FILE_KEY);
-
-            jobs_to_add.add(new CopyJob(source, destination));
-        } else if (TextUtils.equals(command, COMMAND_VALUE_MOVE)) {
-            String source = intent.getStringExtra(SOURCE_FILE_KEY);
-            String destination = intent.getStringExtra(DESTINATION_FILE_KEY);
-
-            jobs_to_add.add(new MoveJob(source, destination));
-        } else if (TextUtils.equals(command, COMMAND_VALUE_MKDIR)) {
-            String destination = intent.getStringExtra(DESTINATION_FILE_KEY);
-
-            jobs_to_add.add(new MkdirJob(destination));
-        } else if (TextUtils.equals(command, COMMAND_VALUE_DELETE)) {
-            String dir = intent.getStringExtra(SOURCE_FILE_KEY);
-
-            if (intent.getBooleanExtra(WITH_DELETE_PARENT_KEY, true)) {
-                jobs_to_add.add(new DeleteJob(dir));
-            } else {
-                for (File child : new File(dir).listFiles()) {
-                    jobs_to_add.add(new DeleteJob(child.getAbsolutePath()));
-                }
-            }
-        } else if (TextUtils.equals(command, COMMAND_VALUE_PROFILE)) {
-            List<String> enable = intent.getStringArrayListExtra(ENABLE_LIST_KEY);
-            List<String> disable = intent.getStringArrayListExtra(DISABLE_LIST_KEY);
-            boolean restartUi = intent.getBooleanExtra(WITH_RESTART_UI_KEY, false);
-            String profile = intent.getStringExtra(PROFILE_NAME_KEY);
-
-            jobs_to_add.add(new ProfileJob(profile, disable, enable, restartUi));
-        }
-
-        if (jobs_to_add.size() > 0) {
-            log("Adding new jobs to job queue");
-
-            synchronized (mJobQueue) {
-                mJobQueue.addAll(jobs_to_add);
-            }
-
-            if (!mJobHandler.hasMessages(JobHandler.MESSAGE_CHECK_QUEUE)) {
-                mJobHandler.sendEmptyMessage(JobHandler.MESSAGE_CHECK_QUEUE);
-            }
-        }
-
         return START_NOT_STICKY;
     }
 
     @Override
     public IBinder onBind(Intent intent) {
-        return null;
+        return mBinder;
+    }
+
+    private final IInterfacerInterface.Stub mBinder = new IInterfacerInterface.Stub() {
+        @Override
+        public void installPackage(List<String> paths) {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                mJobQueue.addAll(paths.stream().map(Installer::new).collect(Collectors.toList()));
+                runQueue();
+            }
+        }
+
+        @Override
+        public void uninstallPackage(List<String> packages, boolean restartUi) {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                mJobQueue.addAll(packages.stream().map(Remover::new).collect(Collectors.toList()));
+                if (restartUi) mJobQueue.add(new UiResetJob());
+                runQueue();
+            }
+        }
+
+        @Override
+        public void restartSystemUI() {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                mJobQueue.add(new UiResetJob());
+                runQueue();
+            }
+        }
+
+        @Override
+        public void restartService() { // Do we still need this with binder?
+        }
+
+        @Override
+        public void configurationShim() {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                mJobQueue.add(new LocaleChanger(getApplicationContext(), mMainHandler));
+                runQueue();
+            }
+        }
+
+        @Override
+        public void applyBootanimation(String name) {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                if (TextUtils.isEmpty(name)) {
+                    mJobQueue.add(new BootAnimationJob(true));
+                } else {
+                    mJobQueue.add(new BootAnimationJob(name));
+                }
+                runQueue();
+            }
+        }
+
+        @Override
+        public void applyFonts(String pid, String fileName) {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                mJobQueue.add(new FontsJob(pid, fileName));
+                mJobQueue.add(new UiResetJob());
+                runQueue();
+            }
+        }
+
+        @Override
+        public void applyAudio(String pid, String fileName) {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                mJobQueue.add(new SoundsJob(pid, fileName));
+                mJobQueue.add(new UiResetJob());
+                runQueue();
+            }
+        }
+
+        @Override
+        public void enableOverlay(List<String> packages, boolean restartUi) {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                mJobQueue.addAll(packages.stream().map(Enabler::new).collect(Collectors.toList()));
+                if (restartUi) mJobQueue.add(new UiResetJob());
+                runQueue();
+            }
+        }
+
+        @Override
+        public void disableOverlay(List<String> packages, boolean restartUi) {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                mJobQueue.addAll(packages.stream().map(Disabler::new).collect(Collectors.toList()));
+                if (restartUi) mJobQueue.add(new UiResetJob());
+                runQueue();
+            }
+        }
+
+        @Override
+        public void changePriority(List<String> packages, boolean restartUi) {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                mJobQueue.add(new PriorityJob(packages));
+                if (restartUi) mJobQueue.add(new UiResetJob());
+                runQueue();
+            }
+        }
+
+        @Override
+        public void copy(String source, String destination) {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                mJobQueue.add(new CopyJob(source, destination));
+                runQueue();
+            }
+        }
+
+        @Override
+        public void move(String source, String destination) {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                mJobQueue.add(new MoveJob(source, destination));
+                runQueue();
+            }
+        }
+
+        @Override
+        public void mkdir(String destination) {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                mJobQueue.add(new MkdirJob(destination));
+                runQueue();
+            }
+        }
+
+        @Override
+        public void deleteDirectory(String directory, boolean withParent) {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                if (withParent) {
+                    mJobQueue.add(new DeleteJob(directory));
+                } else {
+                    for (File child : new File(directory).listFiles()) {
+                        mJobQueue.add(new DeleteJob(child.getAbsolutePath()));
+                    }
+                }
+                runQueue();
+            }
+        }
+
+        @Override
+        public void applyProfile(List<String> enable, List<String> disable, String name,
+                boolean restartUi) {
+            synchronized (mJobQueue) {
+                mIsRunning = isProcessing();
+                mJobQueue.add(new ProfileJob(name, disable, enable, restartUi));
+                runQueue();
+            }
+        }
+    };
+
+    private void runQueue() {
+        if (!mJobHandler.hasMessages(JobHandler.MESSAGE_CHECK_QUEUE)) {
+            mJobHandler.sendEmptyMessage(JobHandler.MESSAGE_CHECK_QUEUE);
+        }
     }
 
     @Override
